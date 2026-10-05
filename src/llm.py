@@ -23,7 +23,7 @@ PROVIDERS = {
     "openrouter": {"key": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1",
                    "chat": "openai/gpt-4o-mini", "embed": "openai/text-embedding-3-small"},
     "gemini": {"key": "GEMINI_API_KEY", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-               "chat": "gemini-2.5-flash-lite", "embed": "gemini-embedding-001"},
+               "chat": "gemini-3.5-flash-lite", "embed": "gemini-embedding-001"},
     "anthropic": {"key": "ANTHROPIC_API_KEY", "base_url": None,
                   "chat": "claude-opus-5-5", "embed": None},
 }
@@ -37,6 +37,8 @@ PRICES_PER_M = {
     "text-embedding-3-small": (0.02, 0.0),
     "text-embedding-3-large": (0.13, 0.0),
     "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-3.8-flash": (0.10, 0.40),
     # Gemini embedding pricing intentionally omitted: the current pricing page does not list gemini-embedding-001.
     "claude-opus-5-5": (4.00, 20.00),
     "claude-sonnet-5-5": (2.00, 10.00),
@@ -114,28 +116,44 @@ class MeteredLLM:
         self._embed_client = (self._chat_client if self.embed_provider == self.chat_provider
                               else _openai_client(self.embed_provider))
 
+    def _call_chat(self, prompt: str, json_mode: bool) -> tuple[str, str, int, int]:
+        if self.chat_provider == "anthropic":
+            return self._chat_anthropic(prompt)
+        if json_mode and self.chat_provider != "gemini":
+            response = self._chat_client.chat.completions.create(
+                model=self.chat_model_id,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+        else:
+            response = self._chat_client.chat.completions.create(
+                model=self.chat_model_id,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+            )
+        text, model = response.choices[0].message.content or "", self.chat_model_id
+        usage = response.usage
+        tokens_in = usage.prompt_tokens if usage else 0
+        tokens_out = usage.completion_tokens if usage else 0
+        return text, model, tokens_in, tokens_out
+
     def chat(self, prompt: str, json_mode: bool = False) -> str:
         start = time.perf_counter()
-        if self.chat_provider == "anthropic":
-            text, model, tokens_in, tokens_out = self._chat_anthropic(prompt)
-        else:
-            if json_mode and self.chat_provider != "gemini":
-                response = self._chat_client.chat.completions.create(
-                    model=self.chat_model_id,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0,
-                    response_format={"type": "json_object"},
-                )
-            else:
-                response = self._chat_client.chat.completions.create(
-                    model=self.chat_model_id,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0,
-                )
-            text, model = response.choices[0].message.content or "", self.chat_model_id
-            usage = response.usage
-            tokens_in = usage.prompt_tokens if usage else 0
-            tokens_out = usage.completion_tokens if usage else 0
+        for attempt in range(6):
+            try:
+                text, model, tokens_in, tokens_out = self._call_chat(prompt, json_mode)
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                transient = any(k in err_str for k in ["429", "500", "502", "503", "504", "quota", "resource_exhausted", "rate", "unavailable", "high demand"])
+                if transient and attempt < 5:
+                    import re
+                    m = re.search(r"retry in (\d+)", err_str) or re.search(r"retrydelay':\s*'(\d+)", err_str)
+                    wait_time = int(m.group(1)) + 2 if m else 5 * (attempt + 1)
+                    time.sleep(wait_time)
+                else:
+                    raise
         self.usage += Usage(1, tokens_in, tokens_out, price(model, tokens_in, tokens_out), time.perf_counter() - start)
         return _strip_fences(text) if json_mode else text
 
@@ -158,7 +176,20 @@ class MeteredLLM:
 
     def embed(self, text: str) -> list[float]:
         start = time.perf_counter()
-        response = self._embed_client.embeddings.create(model=self.embed_model_id, input=text)
+        for attempt in range(6):
+            try:
+                response = self._embed_client.embeddings.create(model=self.embed_model_id, input=text)
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                transient = any(k in err_str for k in ["429", "500", "502", "503", "504", "quota", "resource_exhausted", "rate", "unavailable", "high demand"])
+                if transient and attempt < 5:
+                    import re
+                    m = re.search(r"retry in (\d+)", err_str) or re.search(r"retrydelay':\s*'(\d+)", err_str)
+                    wait_time = int(m.group(1)) + 2 if m else 5 * (attempt + 1)
+                    time.sleep(wait_time)
+                else:
+                    raise
         tokens = getattr(response.usage, "prompt_tokens", 0) or 0   # some OpenAI-compatible APIs omit usage
         self.usage += Usage(1, tokens, 0, price(self.embed_model_id, tokens), time.perf_counter() - start)
         return [float(value) for value in response.data[0].embedding]
