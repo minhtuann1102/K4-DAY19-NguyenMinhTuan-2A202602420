@@ -23,7 +23,7 @@ PROVIDERS = {
     "openrouter": {"key": "OPENROUTER_API_KEY", "base_url": "https://openrouter.ai/api/v1",
                    "chat": "openai/gpt-4o-mini", "embed": "openai/text-embedding-3-small"},
     "gemini": {"key": "GEMINI_API_KEY", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-               "chat": "gemini-3.5-flash-lite", "embed": "gemini-embedding-001"},
+               "chat": "gemini-3.1-flash-lite", "embed": "gemini-embedding-2"},
     "anthropic": {"key": "ANTHROPIC_API_KEY", "base_url": None,
                   "chat": "claude-opus-5-5", "embed": None},
 }
@@ -37,9 +37,12 @@ PRICES_PER_M = {
     "text-embedding-3-small": (0.02, 0.0),
     "text-embedding-3-large": (0.13, 0.0),
     "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.5-flash-lite": (0.30, 2.50),
-    "gemini-3.8-flash": (0.10, 0.40),
-    # Gemini embedding pricing intentionally omitted: the current pricing page does not list gemini-embedding-001.
+    "gemini-3.8-flash": (0.75, 3.75),   # through 2026-12-31; doubles from 2027-01-01
+    # gemini-embedding-001 is not on the pricing page; the Gemini embeddings endpoint returns no token usage,
+    # so embedding cost is recorded as 0 whatever the price below.
+    "gemini-embedding-2": (0.20, 0.0),
     "claude-opus-5-5": (4.00, 20.00),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
